@@ -498,63 +498,120 @@ class Model(BaseModel[ItemType, ReturnType]):
         _force_compute: bool = False,
         **kwargs,
     ) -> Iterator[ReturnType]:
-        batch_size = batch_size or self.batch_size
+        if self._predict_mode == PredictMode.BATCH:
+            # In this case, `_predict_batch` is implemented
+            # and as a result we need to carefully create batches
+            batch_size = batch_size or self.batch_size
 
-        n_items_to_compute = 0
-        n_items_from_cache = 0
-        cache_items: List[CacheItem] = []
-        step = 0
-        for current_item in items:
-            # This loops creates a list of `CacheItems` which
-            # wrap the items with information as to their
-            # status within the cache.
-            # Whenever `cache_items` has `batch_size` elements that need
-            # to be recomputed, `_predict_cache_items` is called, which will
-            # in turn yield all results in the correct order.
-            # Once we have 2 x batch_size elements available from cache
-            # we yield them to avoid indefinite increase in the cache_item
-            # list size.
-            if self.cache and self.model_settings.get("cache_predictions"):
-                if not _force_compute:
-                    # The cache will return a CacheItem with the information
-                    # as to the stored value (if it exists) and if it is missing
-                    # the cache_key needed to store it
-                    cache_item = self.cache.get(
-                        self.configuration_key, current_item, kwargs
-                    )
-                else:
-                    # When force_recomputing, we still need to get
-                    # the cache key
-                    cache_item = CacheItem(
-                        current_item,
-                        self.cache.hash_key(
+            n_items_to_compute = 0
+            n_items_from_cache = 0
+            cache_items: List[CacheItem] = []
+            step = 0
+            for current_item in items:
+                # This loops creates a list of `CacheItems` which
+                # wrap the items with information as to their
+                # status within the cache.
+                # Whenever `cache_items` has `batch_size` elements that need
+                # to be recomputed, `_predict_cache_items` is called, which will
+                # in turn yield all results in the correct order.
+                # Once we have 2 x batch_size elements available from cache
+                # we yield them to avoid indefinite increase in the cache_item
+                # list size.
+                if self.cache and self.model_settings.get("cache_predictions"):
+                    if not _force_compute:
+                        # The cache will return a CacheItem with the information
+                        # as to the stored value (if it exists) and if it is missing
+                        # the cache_key needed to store it
+                        cache_item = self.cache.get(
                             self.configuration_key, current_item, kwargs
-                        ),
-                        None,
-                        True,
-                    )
-                if cache_item.missing:
-                    n_items_to_compute += 1
+                        )
+                    else:
+                        # When force_recomputing, we still need to get
+                        # the cache key
+                        cache_item = CacheItem(
+                            current_item,
+                            self.cache.hash_key(
+                                self.configuration_key, current_item, kwargs
+                            ),
+                            None,
+                            True,
+                        )
+                    if cache_item.missing:
+                        n_items_to_compute += 1
+                    else:
+                        n_items_from_cache += 1
+                    cache_items.append(cache_item)
                 else:
-                    n_items_from_cache += 1
-                cache_items.append(cache_item)
-            else:
-                # When no cache is active, all of them should be computed
-                cache_items.append(CacheItem(current_item, None, None, True))
-                n_items_to_compute += 1
-            if n_items_to_compute == batch_size or n_items_from_cache == 2 * batch_size:
+                    # When no cache is active, all of them should be computed
+                    cache_items.append(CacheItem(current_item, None, None, True))
+                    n_items_to_compute += 1
+                if (
+                    n_items_to_compute == batch_size
+                    or n_items_from_cache == 2 * batch_size
+                ):
+                    yield from self._predict_cache_items(
+                        step, cache_items, _callback=_callback, **kwargs
+                    )
+                    cache_items = []
+                    n_items_to_compute = 0
+                    n_items_from_cache = 0
+                    step += batch_size
+
+            if cache_items:
                 yield from self._predict_cache_items(
                     step, cache_items, _callback=_callback, **kwargs
                 )
-                cache_items = []
-                n_items_to_compute = 0
-                n_items_from_cache = 0
-                step += batch_size
-
-        if cache_items:
-            yield from self._predict_cache_items(
-                step, cache_items, _callback=_callback, **kwargs
-            )
+        else:
+            # This case is simpler, because we do not need to care about
+            # creating batches
+            for current_item in items:
+                if self.cache and self.model_settings.get("cache_predictions"):
+                    if not _force_compute:
+                        cache_item = self.cache.get(
+                            self.configuration_key, current_item, kwargs
+                        )
+                        if not cache_item.missing:
+                            # If the item is not missing, we only need to
+                            # validate and yield
+                            yield self._validate(
+                                cache_item.cache_value,
+                                self._return_model,
+                                ReturnValueValidationException,
+                            )
+                            continue
+                        # If the item is missing, compute and store
+                        validated_item = self._validate(
+                            current_item, self._item_model, ItemValidationException
+                        )
+                        result = self._predict(validated_item, **kwargs)
+                        self.cache.set(cache_item.cache_key, result)
+                        yield self._validate(
+                            result,
+                            self._return_model,
+                            ReturnValueValidationException,
+                        )
+                        continue
+                    # If force compute, compute and store in cache
+                    validated_item = self._validate(
+                        current_item, self._item_model, ItemValidationException
+                    )
+                    result = self._predict(validated_item, **kwargs)
+                    cache_key = self.cache.hash_key(
+                        self.configuration_key, current_item, kwargs
+                    )
+                    self.cache.set(cache_key, result)
+                    yield self._validate(
+                        result, self._return_model, ReturnValueValidationException
+                    )
+                    continue
+                # Without cache, just compute and yield
+                validated_item = self._validate(
+                    current_item, self._item_model, ItemValidationException
+                )
+                result = self._predict(validated_item, **kwargs)
+                yield self._validate(
+                    result, self._return_model, ReturnValueValidationException
+                )
 
     def _predict_cache_items(
         self,
