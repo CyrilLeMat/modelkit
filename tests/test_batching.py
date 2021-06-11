@@ -26,8 +26,11 @@ def _double(x):
     ],
 )
 def test_identitybatch_batch_process(func, items, batch_size, expected, monkeypatch):
+    class SomeModel(Model):
+        def _predict(self, item):
+            return item
 
-    m = Model()
+    m = SomeModel()
     monkeypatch.setattr(m, "_predict_batch", func)
     if batch_size:
         assert m.predict_batch(items, batch_size=batch_size) == expected
@@ -61,7 +64,11 @@ def test_callback_batch_process(items, batch_size, expected_steps, monkeypatch):
         assert items[batch_step : batch_step + batch_size] == batch_items
         steps += 1
 
-    m = Model()
+    class SomeModel(Model):
+        def _predict(self, item):
+            return item
+
+    m = SomeModel()
     monkeypatch.setattr(m, "_predict_batch", func)
     m.predict_batch(items, batch_size=batch_size, _callback=_callback)
     m.predict_gen(items, batch_size=batch_size, _callback=_callback)

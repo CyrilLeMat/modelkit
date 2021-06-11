@@ -180,6 +180,9 @@ def test_modellibrary_required_models():
     class SomeModel(Model):
         CONFIGURATIONS = {"yolo": {}, "les simpsons": {}}
 
+        def _predict(self, item):
+            return item
+
     p = ModelLibrary(models=SomeModel)
     m = p.get("yolo")
     assert m
@@ -227,12 +230,18 @@ def test_dependencies_not_in_init():
         def _load(self):
             self.some_attribute = "ok"
 
+        def _predict(self, item):
+            return item
+
     class Model1(Model):
         CONFIGURATIONS = {"model1": {"model_dependencies": {"model0"}}}
 
         def __init__(self, *args, **kwargs):
             self.some_attribute = self.model_dependencies["model0"].some_attribute
             super().__init__(self, *args, **kwargs)
+
+        def _predict(self, item):
+            return item
 
     with pytest.raises(NoModelDependenciesInInitError):
         ModelLibrary(models=[Model1, Model0])
@@ -243,6 +252,9 @@ def test_dependencies_not_in_init():
         def __init__(self, *args, **kwargs):
             super().__init__(self, *args, **kwargs)
             self.some_attribute = self.model_dependencies["model0"].some_attribute
+
+        def _predict(self, item):
+            return item
 
     with pytest.raises(NoModelDependenciesInInitError):
         ModelLibrary(models=[Model11, Model0])
@@ -356,8 +368,14 @@ def test_required_models():
     class SomeModel(Model):
         CONFIGURATIONS = {"model": {}}
 
+        def _predict(self, item):
+            return item
+
     class SomeOtherModel(Model):
         CONFIGURATIONS = {"other_model": {}}
+
+        def _predict(self, item):
+            return item
 
     svc = ModelLibrary(required_models=[], models=[SomeModel, SomeOtherModel])
     assert len(svc.models) == 0

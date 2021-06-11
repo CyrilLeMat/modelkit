@@ -1,4 +1,5 @@
 import copy
+import enum
 import hashlib
 import pickle  # nosec
 import typing
@@ -10,8 +11,10 @@ from typing import (
     Generic,
     Iterator,
     List,
+    Optional,
     Type,
     Union,
+    cast,
 )
 
 import humanize
@@ -22,6 +25,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.tree import Tree
 from structlog import get_logger
+from typing_extensions import Protocol
 
 import modelkit
 from modelkit.core.settings import LibrarySettings
@@ -185,8 +189,10 @@ class BaseModel(Asset, Generic[ItemType, ReturnType]):
         self._model_cache_key = None
         self._item_model = None
         self._return_model = None
+        self._predict_mode = None
         super().__init__(self, *args, **kwargs)
         self.initialize_validation_models()
+        self._check_is_overriden()
 
     def load(self):
         """For Model instances, there may be a need to also load the dependencies"""
@@ -383,6 +389,44 @@ class BaseModel(Asset, Generic[ItemType, ReturnType]):
                 console.print(describe(result, t=t))
                 raise
 
+    def _check_is_overriden(self):
+        if not hasattr(self._predict, "__not_overriden__"):
+            self._predict_mode = PredictMode.SINGLE
+        if not hasattr(self._predict_batch, "__not_overriden__"):
+            if self._predict_mode == PredictMode.SINGLE:
+                raise BothPredictsOverridenError()
+            self._predict_mode = PredictMode.BATCH
+        if not self._predict_mode:
+            raise NoPredictOverridenError
+
+
+class ActionWithAttributes(Protocol):
+    __call__: Callable
+    __not_overriden__: Optional[bool]
+
+
+def not_overriden(func: Callable) -> ActionWithAttributes:
+    # Decorating with an attribute while preserving
+    # typing is slightly tricky
+    # https://github.com/python/mypy/issues/2087
+
+    func_with_attributes = cast(ActionWithAttributes, func)
+    func_with_attributes.__not_overriden__ = True
+    return func_with_attributes
+
+
+class PredictMode(enum.Enum):
+    SINGLE = 1
+    BATCH = 1
+
+
+class BothPredictsOverridenError(Exception):
+    pass
+
+
+class NoPredictOverridenError(Exception):
+    pass
+
 
 class Model(BaseModel[ItemType, ReturnType]):
     def load(self):
@@ -397,10 +441,12 @@ class Model(BaseModel[ItemType, ReturnType]):
                 if isinstance(m, AsyncModel):
                     self._model_dependencies[model_name] = WrappedAsyncModel(m)
 
+    @not_overriden
     def _predict(self, item: ItemType, **kwargs) -> ReturnType:
         result = self._predict_batch([item], **kwargs)
         return result[0]
 
+    @not_overriden
     def _predict_batch(self, items: List[ItemType], **kwargs) -> List[ReturnType]:
         return [self._predict(p, **kwargs) for p in items]
 
@@ -544,10 +590,12 @@ class Model(BaseModel[ItemType, ReturnType]):
 
 
 class AsyncModel(BaseModel[ItemType, ReturnType]):
+    @not_overriden
     async def _predict(self, item: ItemType, **kwargs) -> ReturnType:
         result = await self._predict_batch([item], **kwargs)
         return result[0]
 
+    @not_overriden
     async def _predict_batch(self, items: List[ItemType], **kwargs) -> List[ReturnType]:
         return [await self._predict(p, **kwargs) for p in items]
 
