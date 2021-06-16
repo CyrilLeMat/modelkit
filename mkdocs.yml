@@ -4,7 +4,7 @@ site_description: 'Library for machine learning models'
 
 nav:
   - Home: 'index.md'
-  - Tutorial:
+  - Developer guides:
     - Models: 'library/overview.md'
     - Getting predictions: 'library/using_models.md'
     - Developing models: 'library/developing_modelkit.md'
@@ -14,6 +14,8 @@ nav:
     - Specific models:
       - Tensorflow models: 'library/special/tensorflow.md'
       - Distant Models: 'library/special/distant.md'
+  - Tutorials:
+      - NLP x Sentiment Analysis: 'examples/nlp_sentiment.md'
   - Configuration:
     - Configuration: 'configuration.md'
   - CLI: 'cli.md'
